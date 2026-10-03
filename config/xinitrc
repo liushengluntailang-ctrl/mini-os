@@ -1,0 +1,24 @@
+#!/bin/sh
+# mini OS - 画面起動設定 (Mac風UI & GPUフリー)
+
+# 1. GPUを使わずCPU描画を強制（グラボ不要化）
+export LIBGL_ALWAYS_SOFTWARE=1
+
+# 2. 日本語入力システム (uim) を起動
+export GTK_IM_MODULE='uim'
+export QT_IM_MODULE='uim'
+export XMODIFIERS='@im=uim'
+uim-xim &
+uim-toolbar-gtk3 &
+
+# 3. Wi-Fi管理アプレットを常駐（画面から接続可能にする）
+connman-gtk --tray &
+
+# 4. ショートカットキー監視（Alt + T でテーマ切り替えなど）
+xbindkeys &
+
+# 5. Mac風タスクバー / Dock (tint2) の起動
+tint2 &
+
+# 6. ウィンドウ管理 (Openbox) の起動
+exec openbox-session
