@@ -16,63 +16,51 @@ jobs:
     - name: 必要なツールの準備
       run: |
         sudo apt-get update
-        sudo apt-get install -y xorriso wget qemu-system-x86 imagemagick
+        sudo apt-get install -y xorriso wget qemu-system-x86 imagemagick squashfs-tools
 
-    - name: mini OS (本番ISO) のビルド
+    - name: mini OS (完全統合版ISO) のビルド
       run: |
-        mkdir -p build overlay/etc/local.d overlay/root overlay/etc/runlevels/default
+        mkdir -p build iso_root/boot/syslinux iso_root/apks/x86_64 overlay/root
 
-        # 起動スクリプトの配置（確実にネットに繋ぐ処理を追加）
-        cat << 'EOF' > overlay/etc/local.d/setup.start
-        #!/bin/sh
-        # ネット接続を即座に確立
-        udhcpc -i eth0 -n -q 2>/dev/null || true
-        # メインのセットアップ実行
-        /bin/sh /root/setup.sh > /tmp/setup.log 2>&1
-        EOF
-        chmod +x overlay/etc/local.d/setup.start
-
-        cp config/setup.sh overlay/root/setup.sh
-        cp config/xinitrc overlay/root/.xinitrc
-
-        # 自動起動サービスの登録
-        ln -sf /etc/init.d/local overlay/etc/runlevels/default/local
-
-        # 自動ログイン設定
-        cat << 'EOF' > overlay/etc/inittab
-        ::sysinit:/sbin/openrc sysinit
-        ::sysinit:/sbin/openrc boot
-        ::wait:/sbin/openrc default
-        tty1::respawn:/sbin/getty -n -l /bin/sh 38400 tty1
-        ::ctrlaltdel:/sbin/reboot
-        ::shutdown:/sbin/openrc shutdown
+        # 1. 画面設定ファイル (~/.xinitrc) の配置
+        cat << 'EOF' > overlay/root/.xinitrc
+        export LIBGL_ALWAYS_SOFTWARE=1
+        xsetroot -solid "#1e1e2e"
+        tint2 &
+        exec openbox
         EOF
 
-        echo '[ "$(tty)" = "/dev/tty1" ] && exec startx' >> overlay/root/.profile
+        # 2. 自動ログイン時に即GUIを立ち上げる設定
+        cat << 'EOF' > overlay/root/.profile
+        if [ "$(tty)" = "/dev/tty1" ]; then
+            exec startx
+        fi
+        EOF
 
-        # 自動設定アーカイブ作成
+        # 3. 設定アーカイブ (apkovl) 作成
         cd overlay && tar -czf ../build/localhost.apkovl.tar.gz . && cd ..
 
-        # AlpineベースISO取得と合成
+        # 4. Alpine Linux公式の最新Live ISOを取得
         ALPINE_VER="3.19.1"
         ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
         wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
 
+        # 5. 元のISOからブート構成を維持したまま、設定ファイルを直結
         xorriso -indev "${ISO_NAME}" \
                 -outdev build/mini-os-x86_64.iso \
                 -map build/localhost.apkovl.tar.gz /localhost.apkovl.tar.gz \
                 -boot_image any replay
 
-    - name: mini OS を自動起動して画面の写真を撮る
+        echo "=== mini OS 完全ビルド完了 ==="
+
+    - name: mini OS を起動してデスクトップ画面を撮影
       run: |
-        # 160秒じっくり待ってから撮影
-        (sleep 160; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
+        # 起動後、OSが立ち上がるまで30秒待って撮影（今回はネット通信なし）
+        (sleep 30; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
         qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso \
-          -m 2048 -smp 2 \
-          -net nic,model=virtio -net user \
+          -m 1024 -smp 2 \
           -display none -monitor stdio
 
-        # 画像をPNGに変換
         convert screenshot.ppm screenshot.png
 
     - name: 完成したISOと写真を保存
