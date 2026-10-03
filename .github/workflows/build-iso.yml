@@ -16,7 +16,7 @@ jobs:
     - name: 必要なツールの準備
       run: |
         sudo apt-get update
-        sudo apt-get install -y xorriso isolinux syslinux-utils wget mtools
+        sudo apt-get install -y xorriso wget
 
     - name: mini OS (本番ISO) のビルド
       run: |
@@ -37,29 +37,11 @@ jobs:
         ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
         wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
 
-        # 4. ベースISOに mini OS の設定 (apkovl) を注入して再パッケージ
-        mkdir -p iso_extracted
-        xorriso -osirrox on -indev "${ISO_NAME}" -extract / iso_extracted/
-        chmod -R +w iso_extracted/
-
-        # mini OS の設定ファイルをISOのルートに配置
-        cp build/localhost.apkovl.tar.gz iso_extracted/
-
-        # 起動時に自動でローカル設定を読み込ませるブート設定
-        sed -i 's/modules=loop,squashfs/modules=loop,squashfs apkovl=localhost.apkovl.tar.gz/g' iso_extracted/boot/syslinux/syslinux.cfg 2>/dev/null || true
-
-        # 5. 本物のブータブルISO「mini-os-x86_64.iso」を生成
-        xorriso -as mkisofs \
-          -r -V "MINI_OS" \
-          -J -joliet-long \
-          -b boot/syslinux/isolinux.bin \
-          -c boot/syslinux/boot.cat \
-          -no-emul-boot -boot-load-size 4 -boot-info-table \
-          -eltorito-alt-boot \
-          -e boot/syslinux/efi.img -no-emul-boot \
-          -isohybrid-gpt-basdat \
-          -o build/mini-os-x86_64.iso \
-          iso_extracted/
+        # 4. 元のISOの起動構造を維持したまま mini OS の設定を注入
+        xorriso -indev "${ISO_NAME}" \
+                -outdev build/mini-os-x86_64.iso \
+                -map build/localhost.apkovl.tar.gz /localhost.apkovl.tar.gz \
+                -boot_image any replay
 
         echo "=== mini OS ISO ビルド完了 ==="
 
