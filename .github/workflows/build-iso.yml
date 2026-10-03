@@ -16,29 +16,52 @@ jobs:
     - name: 必要なツールの準備
       run: |
         sudo apt-get update
-        sudo apt-get install -y xorriso mtools dosfstools squashfs-tools
+        sudo apt-get install -y xorriso isolinux syslinux-utils wget mtools
 
-    - name: mini OS (ISO) のビルド
+    - name: mini OS (本番ISO) のビルド
       run: |
-        mkdir -p build/iso
-        # 設定ファイルをOSイメージ用のオーバーレイにまとめる
-        mkdir -p overlay/etc/local.d
-        cp config/setup.sh overlay/etc/local.d/mini-setup.start
-        chmod +x overlay/etc/local.d/mini-setup.start
-        
-        # 起動スクリプトの配置
-        mkdir -p overlay/root
+        mkdir -p build overlay/etc/local.d overlay/root
+
+        # 1. 起動スクリプトの配置
+        cp config/setup.sh overlay/etc/local.d/setup.start
+        chmod +x overlay/etc/local.d/setup.start
         cp config/xinitrc overlay/root/.xinitrc
 
-        # mini OS のオーバーレイアーカイブを作成
-        cd overlay && tar -czf ../build/mini-os.apkovl.tar.gz . && cd ..
+        # 2. 自動設定アーカイブ (apkovl) の作成
+        cd overlay
+        tar -czf ../build/localhost.apkovl.tar.gz .
+        cd ..
 
-        # 最小ブートイメージのパッケージング
-        echo "=== mini OS のパッケージング処理 ==="
-        docker run --rm -v $(pwd):/workspace -w /workspace alpine:3.19 sh -c "
-          apk update && apk add alpine-sdk xorriso syslinux mtools
-          echo 'mini OS build finished' > build/mini-os-x86_64.iso
-        "
+        # 3. Alpine Linux公式のベースISOを取得
+        ALPINE_VER="3.19.1"
+        ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
+        wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
+
+        # 4. ベースISOに mini OS の設定 (apkovl) を注入して再パッケージ
+        mkdir -p iso_extracted
+        xorriso -osirrox on -indev "${ISO_NAME}" -extract / iso_extracted/
+        chmod -R +w iso_extracted/
+
+        # mini OS の設定ファイルをISOのルートに配置
+        cp build/localhost.apkovl.tar.gz iso_extracted/
+
+        # 起動時に自動でローカル設定を読み込ませるブート設定
+        sed -i 's/modules=loop,squashfs/modules=loop,squashfs apkovl=localhost.apkovl.tar.gz/g' iso_extracted/boot/syslinux/syslinux.cfg 2>/dev/null || true
+
+        # 5. 本物のブータブルISO「mini-os-x86_64.iso」を生成
+        xorriso -as mkisofs \
+          -r -V "MINI_OS" \
+          -J -joliet-long \
+          -b boot/syslinux/isolinux.bin \
+          -c boot/syslinux/boot.cat \
+          -no-emul-boot -boot-load-size 4 -boot-info-table \
+          -eltorito-alt-boot \
+          -e boot/syslinux/efi.img -no-emul-boot \
+          -isohybrid-gpt-basdat \
+          -o build/mini-os-x86_64.iso \
+          iso_extracted/
+
+        echo "=== mini OS ISO ビルド完了 ==="
 
     - name: 完成したISOをダウンロード可能にする
       uses: actions/upload-artifact@v4
