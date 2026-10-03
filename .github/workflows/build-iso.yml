@@ -22,15 +22,23 @@ jobs:
       run: |
         mkdir -p build overlay/etc/local.d overlay/root overlay/etc/runlevels/default
 
-        # 1. 起動スクリプトの配置
-        cp config/setup.sh overlay/etc/local.d/setup.start
+        # 起動スクリプトの配置（確実にネットに繋ぐ処理を追加）
+        cat << 'EOF' > overlay/etc/local.d/setup.start
+        #!/bin/sh
+        # ネット接続を即座に確立
+        udhcpc -i eth0 -n -q 2>/dev/null || true
+        # メインのセットアップ実行
+        /bin/sh /root/setup.sh > /tmp/setup.log 2>&1
+        EOF
         chmod +x overlay/etc/local.d/setup.start
+
+        cp config/setup.sh overlay/root/setup.sh
         cp config/xinitrc overlay/root/.xinitrc
 
-        # 2. 自動起動サービスの登録 (local.d を有効化)
+        # 自動起動サービスの登録
         ln -sf /etc/init.d/local overlay/etc/runlevels/default/local
 
-        # 3. 自動ログイン設定 (パスワードなしで即rootログインして画面起動)
+        # 自動ログイン設定
         cat << 'EOF' > overlay/etc/inittab
         ::sysinit:/sbin/openrc sysinit
         ::sysinit:/sbin/openrc boot
@@ -40,13 +48,12 @@ jobs:
         ::shutdown:/sbin/openrc shutdown
         EOF
 
-        # 4. rootのログイン時に自動でX11 (GUI) を起動する設定
         echo '[ "$(tty)" = "/dev/tty1" ] && exec startx' >> overlay/root/.profile
 
-        # 5. 自動設定アーカイブ (apkovl) 作成
+        # 自動設定アーカイブ作成
         cd overlay && tar -czf ../build/localhost.apkovl.tar.gz . && cd ..
 
-        # 6. AlpineベースISO取得と合成
+        # AlpineベースISO取得と合成
         ALPINE_VER="3.19.1"
         ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
         wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
@@ -58,9 +65,12 @@ jobs:
 
     - name: mini OS を自動起動して画面の写真を撮る
       run: |
-        # CPU2コア・メモリ2GBを割り当て、起動完了までじっくり待ってから撮影
-        (sleep 75; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
-        qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso -m 2048 -smp 2 -display none -monitor stdio
+        # 160秒じっくり待ってから撮影
+        (sleep 160; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
+        qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso \
+          -m 2048 -smp 2 \
+          -net nic,model=virtio -net user \
+          -display none -monitor stdio
 
         # 画像をPNGに変換
         convert screenshot.ppm screenshot.png
