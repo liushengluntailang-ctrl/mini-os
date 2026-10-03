@@ -16,37 +16,43 @@ jobs:
     - name: 必要なツールの準備
       run: |
         sudo apt-get update
-        sudo apt-get install -y xorriso wget
+        sudo apt-get install -y xorriso wget qemu-system-x86 imagemagick
 
     - name: mini OS (本番ISO) のビルド
       run: |
         mkdir -p build overlay/etc/local.d overlay/root
 
-        # 1. 起動スクリプトの配置
+        # 起動スクリプトの配置
         cp config/setup.sh overlay/etc/local.d/setup.start
         chmod +x overlay/etc/local.d/setup.start
         cp config/xinitrc overlay/root/.xinitrc
 
-        # 2. 自動設定アーカイブ (apkovl) の作成
-        cd overlay
-        tar -czf ../build/localhost.apkovl.tar.gz .
-        cd ..
+        # 自動設定アーカイブ (apkovl) の作成
+        cd overlay && tar -czf ../build/localhost.apkovl.tar.gz . && cd ..
 
-        # 3. Alpine Linux公式のベースISOを取得
+        # AlpineベースISO取得と合成
         ALPINE_VER="3.19.1"
         ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
         wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
 
-        # 4. 元のISOの起動構造を維持したまま mini OS の設定を注入
         xorriso -indev "${ISO_NAME}" \
                 -outdev build/mini-os-x86_64.iso \
                 -map build/localhost.apkovl.tar.gz /localhost.apkovl.tar.gz \
                 -boot_image any replay
 
-        echo "=== mini OS ISO ビルド完了 ==="
+    - name: mini OS を自動起動して画面の写真を撮る
+      run: |
+        # QEMUでOSを裏で立ち上げ、35秒後にスクショを撮って終了
+        (sleep 35; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
+        qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso -m 1024 -display none -monitor stdio
 
-    - name: 完成したISOをダウンロード可能にする
+        # 画像をPNGに変換
+        convert screenshot.ppm screenshot.png
+
+    - name: 完成したISOと写真を保存
       uses: actions/upload-artifact@v4
       with:
-        name: mini-os-x86_64-iso
-        path: build/mini-os-x86_64.iso
+        name: mini-os-result
+        path: |
+          build/mini-os-x86_64.iso
+          screenshot.png
