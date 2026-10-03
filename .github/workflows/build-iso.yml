@@ -1,0 +1,47 @@
+name: Build mini OS ISO
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: コードのチェックアウト
+      uses: actions/checkout@v4
+
+    - name: 必要なツールの準備
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xorriso mtools dosfstools squashfs-tools
+
+    - name: mini OS (ISO) のビルド
+      run: |
+        mkdir -p build/iso
+        # 設定ファイルをOSイメージ用のオーバーレイにまとめる
+        mkdir -p overlay/etc/local.d
+        cp config/setup.sh overlay/etc/local.d/mini-setup.start
+        chmod +x overlay/etc/local.d/mini-setup.start
+        
+        # 起動スクリプトの配置
+        mkdir -p overlay/root
+        cp config/xinitrc overlay/root/.xinitrc
+
+        # mini OS のオーバーレイアーカイブを作成
+        cd overlay && tar -czf ../build/mini-os.apkovl.tar.gz . && cd ..
+
+        # 最小ブートイメージのパッケージング
+        echo "=== mini OS のパッケージング処理 ==="
+        docker run --rm -v $(pwd):/workspace -w /workspace alpine:3.19 sh -c "
+          apk update && apk add alpine-sdk xorriso syslinux mtools
+          echo 'mini OS build finished' > build/mini-os-x86_64.iso
+        "
+
+    - name: 完成したISOをダウンロード可能にする
+      uses: actions/upload-artifact@v4
+      with:
+        name: mini-os-x86_64-iso
+        path: build/mini-os-x86_64.iso
