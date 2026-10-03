@@ -16,13 +16,13 @@ jobs:
     - name: 必要なツールの準備
       run: |
         sudo apt-get update
-        sudo apt-get install -y xorriso wget qemu-system-x86 imagemagick squashfs-tools
+        sudo apt-get install -y xorriso wget qemu-system-x86 imagemagick
 
-    - name: mini OS (完全統合版ISO) のビルド
+    - name: mini OS (完全オフライン組み込みISO) のビルド
       run: |
-        mkdir -p build iso_root/boot/syslinux iso_root/apks/x86_64 overlay/root
+        mkdir -p build overlay/etc/local.d overlay/root overlay/etc/runlevels/default apks_cache
 
-        # 1. 画面設定ファイル (~/.xinitrc) の配置
+        # 1. デスクトップ環境の自動起動スクリプト
         cat << 'EOF' > overlay/root/.xinitrc
         export LIBGL_ALWAYS_SOFTWARE=1
         xsetroot -solid "#1e1e2e"
@@ -30,24 +30,48 @@ jobs:
         exec openbox
         EOF
 
-        # 2. 自動ログイン時に即GUIを立ち上げる設定
-        cat << 'EOF' > overlay/root/.profile
-        if [ "$(tty)" = "/dev/tty1" ]; then
-            exec startx
-        fi
+        # 2. 起動時にGUIを立ち上げる設定
+        cat << 'EOF' > overlay/etc/local.d/gui.start
+        #!/bin/sh
+        # パッケージをオフライン（CD内）から即座に展開
+        apk add --no-network /media/cdrom/apks/x86_64/*.apk 2>/dev/null || true
+        # X11 (GUI) を自動起動
+        startx /root/.xinitrc -- :0 &
         EOF
+        chmod +x overlay/etc/local.d/gui.start
+
+        ln -sf /etc/init.d/local overlay/etc/runlevels/default/local
 
         # 3. 設定アーカイブ (apkovl) 作成
         cd overlay && tar -czf ../build/localhost.apkovl.tar.gz . && cd ..
 
-        # 4. Alpine Linux公式の最新Live ISOを取得
+        # 4. AlpineベースISOの取得と展開
         ALPINE_VER="3.19.1"
         ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
         wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
 
-        # 5. 元のISOからブート構成を維持したまま、設定ファイルを直結
+        mkdir -p iso_extracted
+        xorriso -osirrox on -indev "${ISO_NAME}" -extract / iso_extracted/
+        chmod -R +w iso_extracted/
+
+        # 5. 【超重要】必要なGUIパッケージ群をビルド時に丸ごとダウンロードしてISO内に格納
+        docker run --rm -v $(pwd):/workspace alpine:3.19 sh -c "
+          echo 'https://dl-cdn.alpinelinux.org/alpine/v3.19/main' > /etc/apk/repositories
+          echo 'https://dl-cdn.alpinelinux.org/alpine/v3.19/community' >> /etc/apk/repositories
+          apk update
+          # 画面表示に必要な最小限の部品をローカルに一括取得
+          mkdir -p /workspace/iso_extracted/apks/x86_64
+          cd /workspace/iso_extracted/apks/x86_64
+          apk fetch -R xorg-server xf86-video-modesetting xf86-video-vesa xinit openbox tint2 xterm
+        "
+
+        # 6. mini OS の設定ファイルをISOに配置
+        cp build/localhost.apkovl.tar.gz iso_extracted/
+
+        # 7. 元の起動システムを完全維持して mini-os-x86_64.iso を再パッケージ
         xorriso -indev "${ISO_NAME}" \
                 -outdev build/mini-os-x86_64.iso \
+                -map iso_extracted/apks /apks \
                 -map build/localhost.apkovl.tar.gz /localhost.apkovl.tar.gz \
                 -boot_image any replay
 
@@ -55,8 +79,8 @@ jobs:
 
     - name: mini OS を起動してデスクトップ画面を撮影
       run: |
-        # 起動後、OSが立ち上がるまで30秒待って撮影（今回はネット通信なし）
-        (sleep 30; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
+        # オフラインなので即起動。45秒で十分立ち上がります
+        (sleep 45; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
         qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso \
           -m 1024 -smp 2 \
           -display none -monitor stdio
