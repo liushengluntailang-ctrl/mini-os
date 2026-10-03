@@ -20,17 +20,33 @@ jobs:
 
     - name: mini OS (本番ISO) のビルド
       run: |
-        mkdir -p build overlay/etc/local.d overlay/root
+        mkdir -p build overlay/etc/local.d overlay/root overlay/etc/runlevels/default
 
-        # 起動スクリプトの配置
+        # 1. 起動スクリプトの配置
         cp config/setup.sh overlay/etc/local.d/setup.start
         chmod +x overlay/etc/local.d/setup.start
         cp config/xinitrc overlay/root/.xinitrc
 
-        # 自動設定アーカイブ (apkovl) の作成
+        # 2. 自動起動サービスの登録 (local.d を有効化)
+        ln -sf /etc/init.d/local overlay/etc/runlevels/default/local
+
+        # 3. 自動ログイン設定 (パスワードなしで即rootログインして画面起動)
+        cat << 'EOF' > overlay/etc/inittab
+        ::sysinit:/sbin/openrc sysinit
+        ::sysinit:/sbin/openrc boot
+        ::wait:/sbin/openrc default
+        tty1::respawn:/sbin/getty -n -l /bin/sh 38400 tty1
+        ::ctrlaltdel:/sbin/reboot
+        ::shutdown:/sbin/openrc shutdown
+        EOF
+
+        # 4. rootのログイン時に自動でX11 (GUI) を起動する設定
+        echo '[ "$(tty)" = "/dev/tty1" ] && exec startx' >> overlay/root/.profile
+
+        # 5. 自動設定アーカイブ (apkovl) 作成
         cd overlay && tar -czf ../build/localhost.apkovl.tar.gz . && cd ..
 
-        # AlpineベースISO取得と合成
+        # 6. AlpineベースISO取得と合成
         ALPINE_VER="3.19.1"
         ISO_NAME="alpine-standard-${ALPINE_VER}-x86_64.iso"
         wget -q "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/${ISO_NAME}"
@@ -42,9 +58,9 @@ jobs:
 
     - name: mini OS を自動起動して画面の写真を撮る
       run: |
-        # QEMUでOSを裏で立ち上げ、35秒後にスクショを撮って終了
-        (sleep 35; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
-        qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso -m 1024 -display none -monitor stdio
+        # CPU2コア・メモリ2GBを割り当て、起動完了までじっくり待ってから撮影
+        (sleep 75; echo "screendump screenshot.ppm"; sleep 2; echo "quit") | \
+        qemu-system-x86_64 -cdrom build/mini-os-x86_64.iso -m 2048 -smp 2 -display none -monitor stdio
 
         # 画像をPNGに変換
         convert screenshot.ppm screenshot.png
